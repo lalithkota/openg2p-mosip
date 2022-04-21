@@ -48,6 +48,7 @@ echo Installing openg2p-mosip-auth-mediator...
 helm -n $NS install openg2p-mosip-auth-mediator charts/openg2p-mosip-auth-mediator \
   --set mediator.mosip.ida.url=$MOSIP_IDA_URL \
   --set mediator.mosip.ida.domain=$MOSIP_IDA_DOMAIN_URI \
+  --set mediator.mosip.iamTokenUrl=$MOSIP_IAM_TOKEN_ENDPOINT \
   --set mediator.openg2p.mosipPartnerClientSecretName="openg2p-partner-creds" \
   --set mediator.openg2p.certsKeys.secretName="openg2p-partner-certs-keys" \
   --wait
