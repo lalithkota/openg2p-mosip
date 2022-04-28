@@ -4,6 +4,7 @@ import io.mosip.openg2p.mediator.dto.CryptoResponse;
 import io.mosip.openg2p.mediator.exception.BaseCheckedException;
 import io.mosip.openg2p.mediator.util.CryptoUtil;
 import io.mosip.openg2p.mediator.util.TokenUtil;
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.slf4j.Logger;
@@ -31,6 +32,15 @@ import java.util.TimeZone;
 public class DemoAuthService {
 
     private final Logger LOGGER = LoggerFactory.getLogger(DemoAuthService.class);
+
+    @Value("${openg2p.mosip.kyc.type}")
+    private String KYC_TYPE;
+    @Value("${openg2p.mosip.kyc.status.un.success.with.errors}")
+    private String UN_SUCCESS_WITH_ERRORS;
+    @Value("${openg2p.mosip.kyc.status.success.with.errors}")
+    private String SUCCESS_WITH_ERRORS;
+    @Value("${openg2p.mosip.kyc.status.success}")
+    private String SUCCESS;
 
     @Autowired
     private TokenUtil tokenUtil;
@@ -66,6 +76,7 @@ public class DemoAuthService {
     private SecureRandom secureRandom = null;
 
     public String authenticate(String upstreamRequest) {
+        String txnId = randomAlphaNumericString(10);
         SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
         sdf.setTimeZone(TimeZone.getTimeZone("UTC"));
         JSONObject upstreamJson;
@@ -73,7 +84,7 @@ public class DemoAuthService {
         try{
             upstreamJson = new JSONObject(upstreamRequest);
             language = convertLangCode(upstreamJson.getString("lang"));
-            dob = convertDOB(upstreamJson.getString("dateOfBirth"), openg2pDobPattern, mosipDobPattern);
+            dob = convertDOB(upstreamJson.getString("dateofbirth"), openg2pDobPattern, mosipDobPattern);
             fullName = upstreamJson.getString("fullname");
             phone = upstreamJson.getString("phone");
             email = upstreamJson.getString("email");
@@ -81,12 +92,12 @@ public class DemoAuthService {
             fullAddress = getFullAddressFromJson(upstreamJson, fullAddressOrder, fullAddressSeparator);
             vid = upstreamJson.getString("id");
         } catch (JSONException je) {
-            String error = "Unable to parse request JSON";
+            String error = "Unable to parse request JSON. " + je.getMessage();
             LOGGER.error(error, je);
-            return returnErrorResponse(sdf.format(new Date()),error);
+            return returnErrorResponse(sdf.format(new Date()),txnId,error);
         } catch (BaseCheckedException e) {
             LOGGER.error(e.getMessage(), e);
-            return returnErrorResponse(sdf.format(new Date()),e.getMessage());
+            return returnErrorResponse(sdf.format(new Date()),txnId,e.getMessage());
         }
 
         CryptoResponse encryptedRequest;
@@ -124,7 +135,7 @@ public class DemoAuthService {
         } catch(BaseCheckedException e) {
             String error = "Demo Auth Crypto - Error while Encrypting / Signing Request";
             LOGGER.error(error, e);
-            return returnErrorResponse(sdf.format(new Date()),error);
+            return returnErrorResponse(sdf.format(new Date()), txnId,error);
         }
         LOGGER.info("Demo Auth Request - Successfully Encrypted Request");
 
@@ -133,7 +144,7 @@ public class DemoAuthService {
             "\"version\": \"" + idaAuthVersion + "\"" + "," +
             "\"individualId\": \"" + vid + "\"" + "," +
             //"\"individualIdType\": \"VID\"" + "," +
-            "\"transactionID\": \"" + randomAlphaNumericString(10) + "\"" + "," +
+            "\"transactionID\": \"" + txnId + "\"" + "," +
             "\"requestTime\": \"" + sdf.format(new Date()) + "\"" + "," +
             "\"specVersion\": \"" + idaAuthVersion + "\"" + "," +
             "\"thumbprint\": \"" + encryptedRequest.getThumbprint() + "\"" + "," +
@@ -158,7 +169,7 @@ public class DemoAuthService {
         } catch (BaseCheckedException e) {
             String error = "Demo Authentication JwtSign - Error getting signature";
             LOGGER.error(error,e);
-            return returnErrorResponse(sdf.format(new Date()),error);
+            return returnErrorResponse(sdf.format(new Date()), txnId, error);
         }
 
         String token;
@@ -167,7 +178,7 @@ public class DemoAuthService {
         } catch (BaseCheckedException e) {
             String error = "Demo Authentication Token - Error getting partner auth token";
             LOGGER.error(error,e);
-            return returnErrorResponse(sdf.format(new Date()),error);
+            return returnErrorResponse(sdf.format(new Date()), txnId, error);
         }
 
         String response;
@@ -182,9 +193,48 @@ public class DemoAuthService {
         } catch (Exception e) {
             String error = "Demo Authentication - Error while Authentication";
             LOGGER.error(error, e);
-            return returnErrorResponse(sdf.format(new Date()),error + ": " + getStackTrace(e));
+            return returnErrorResponse(sdf.format(new Date()), txnId, error + ": " + getStackTrace(e));
         }
-        return response;
+
+        return handleResponse(response, sdf.format(new Date()), txnId);
+    }
+
+    private String handleResponse(String response, String timestamp, String txnId){
+        try{
+            JSONObject json = new JSONObject(response);
+            if(json.has("errors") && !json.isNull("errors")){
+                JSONArray errors = json.getJSONArray("errors");
+                if(json.has("response") && !json.isNull("response") && json.getJSONObject("response").has("authToken") && !json.getJSONObject("response").isNull("authToken")){
+                    String authToken = json.getJSONObject("response").getString("authToken");
+                    return returnAuthResponse(timestamp, txnId, authToken, SUCCESS_WITH_ERRORS, collateErrors(errors));
+                } else {
+                    return returnErrorResponse(timestamp, txnId, collateErrors(errors));
+                }
+            } else {
+                if(json.has("response") && !json.isNull("response")){
+                    JSONObject resJson = json.getJSONObject("response");
+                    if(resJson.has("authStatus") && !resJson.isNull("authStatus") && resJson.getBoolean("authStatus")){
+                        if(resJson.has("authToken") && !resJson.isNull("authToken")){
+                            return returnAuthResponse(timestamp, txnId, resJson.getString("authToken"), SUCCESS, "All Success");
+                        } else {
+                            return returnAuthResponse(timestamp, txnId, "", SUCCESS_WITH_ERRORS, "Kyc Id not found, but returned Success.");
+                        }
+                    } else {
+                        if(resJson.has("authToken") && !resJson.isNull("authToken")){
+                            return returnAuthResponse(timestamp,txnId, resJson.getString("authToken"), SUCCESS_WITH_ERRORS, "Unknown Kyc Status, but no errors.");
+                        } else {
+                            return returnErrorResponse(timestamp,txnId, "Unknown error: Improper response from mosip.");
+                        }
+                    }
+                } else {
+                    return returnErrorResponse(timestamp,txnId,"UNKNOWN");
+                }
+            }
+        } catch(JSONException je) {
+            String error="Unable to parse response json.";
+            LOGGER.error(error, je);
+            return returnErrorResponse(timestamp,txnId, error + getStackTrace(je));
+        }
     }
 
     public static String getStackTrace(Throwable e){
@@ -204,18 +254,32 @@ public class DemoAuthService {
             .toString();
     }
 
-    private String returnErrorResponse(String timestamp, String error){
+    private String returnAuthResponse(String timestamp, String txnId, String authToken, String authStatus, String authMessage){
         return "{" +
-            "\"responseTime\": \"" + timestamp + "\"" + "," +
-            "\"response\": null" + "," +
-            "\"errors\":[" +
-                "{" +
-                    "\"errorMessage\": \"" + error + "\"" + "," +
-                    "\"actionMessage\": \"\"" + "," +
-                    "\"errorCode\": \"\"" + "," +
-                "}" +
-            "]" +
+            "\"timestamp\": \"" + timestamp + "\"" + "," +
+            "\"txnId\": \"" + txnId + "\"" + "," +
+            "\"authIdType\": \"" + KYC_TYPE + "\"" + "," +
+            "\"authId\": \"" + authToken + "\"" + "," +
+            "\"authIdStatus\": \"" + authStatus + "\"" + "," +
+            "\"authIdMessage\":\"" + authMessage + "\"" +
         "}";
+    }
+
+    private String returnErrorResponse(String timestamp, String txnId, String error){
+        return returnAuthResponse(timestamp,txnId,"",UN_SUCCESS_WITH_ERRORS,error);
+    }
+
+    private String collateErrors(JSONArray jArr) throws JSONException{
+        String err = "";
+        for(int i=0;i<jArr.length();i++){
+            if(i!=0)err+="&&";
+            err+=jArr.getJSONObject(i).getString("errorMessage");
+            if(jArr.getJSONObject(i).has("actionMessage")){
+                err+=":";
+                err+=jArr.getJSONObject(i).getString("actionMessage");
+            }
+        }
+        return err;
     }
 
     private String getFullAddressFromJson(JSONObject json, String order, String separator) throws JSONException{

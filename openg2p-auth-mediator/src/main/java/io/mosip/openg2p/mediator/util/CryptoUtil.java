@@ -107,7 +107,7 @@ public class CryptoUtil {
         }
 
         try{
-            encryptCertThumbprint = Base64.encodeBase64String(MessageDigest.getInstance("SHA-256").digest(encryptCert.getEncoded()));
+            encryptCertThumbprint = Base64.encodeBase64URLSafeString(MessageDigest.getInstance("SHA-256").digest(encryptCert.getEncoded()));
         } catch(Exception e) {
             throw new RuntimeException("Unable to generate thumbprint.", e);
         }
