@@ -41,7 +41,7 @@ jobs:
         docker build . --file Dockerfile --tag ${{ env.SERVICE_NAME }}
 
     - name: Log into registry
-      run: echo "${{ secrets.token_docker_hub }}" | docker login -u ${{ secrets.actor_docker_hub }} --password-stdin
+      run: echo "${{ secrets.release_docker_hub }}" | docker login -u ${{ secrets.actor_docker_hub }} --password-stdin
 
     - name: Push image
       run: |
